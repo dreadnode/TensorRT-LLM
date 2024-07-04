@@ -19,7 +19,7 @@ from ..._utils import pad_vocab_size
 from ...functional import (AllReduceFusionOp, AllReduceFusionParams, Tensor,
                            non_gated_version, recv, send)
 from ...layers import (MOE, Attention, AttentionMaskType, ColumnLinear,
-                       Embedding, GatedMLP, PositionEmbeddingType, RmsNorm)
+                       Embedding, GatedMLP, PositionEmbeddingType, LayerNorm, RmsNorm)
 from ...lora_manager import LoraConfig, use_lora
 from ...mapping import Mapping
 from ...module import Module
@@ -34,6 +34,20 @@ from .convert import (load_hf_llama, load_weights_from_hf_by_shard,
                       load_weights_from_hf_safetensors,
                       load_weights_from_meta_ckpt)
 
+def get_layer_norm(config: LLaMAConfig) -> Module:
+        if config.layer_norm_type == "rms":
+            return RmsNorm(normalized_shape=config.hidden_size,
+                                    eps=config.norm_epsilon,
+                                    dtype=config.dtype)
+        else:
+            # OLMo uses non-parametric layer norm
+            return LayerNorm(
+                        normalized_shape=config.hidden_size,
+                        eps=config.norm_epsilon,
+                        elementwise_affine=False,
+                        bias=False,
+                        dtype=config.dtype)
+            
 
 class LLaMADecoderLayer(Module):
 
@@ -42,9 +56,7 @@ class LLaMADecoderLayer(Module):
         self.layer_idx = layer_idx
         self.config = config
 
-        self.input_layernorm = RmsNorm(normalized_shape=config.hidden_size,
-                                       eps=config.norm_epsilon,
-                                       dtype=config.dtype)
+        self.input_layernorm = config.get_layer_norm()
 
         layers_range = config.mapping.pp_layers(config.num_hidden_layers)
         self.local_layer_idx = layer_idx - layers_range[0]
@@ -64,7 +76,8 @@ class LLaMADecoderLayer(Module):
             tp_group=config.mapping.tp_group,
             tp_size=config.mapping.tp_size,
             tp_rank=config.mapping.tp_rank,
-            quant_mode=config.quant_mode)
+            quant_mode=config.quant_mode,
+            clip_qkv=config.clip_qkv)
 
         mlp_hidden_size = config.hidden_size * 4 if config.intermediate_size is None else config.intermediate_size
 
@@ -86,9 +99,7 @@ class LLaMADecoderLayer(Module):
                           quant_mode=config.quant_mode,
                           **mlp_kwargs)
 
-        self.post_layernorm = RmsNorm(normalized_shape=config.hidden_size,
-                                      eps=config.norm_epsilon,
-                                      dtype=config.dtype)
+        self.post_layernorm = config.get_layer_norm()
 
         # Residual MLP that applies on pre-attention input
         # TODO: change to self.has_residual_mlp = self.config.residual_mlp after ModelOpt quantize config is updated
@@ -98,10 +109,7 @@ class LLaMADecoderLayer(Module):
             self.has_residual_mlp = True
 
         if self.has_residual_mlp:
-            self.residual_layernorm = RmsNorm(
-                normalized_shape=config.hidden_size,
-                eps=config.norm_epsilon,
-                dtype=config.dtype)
+            self.residual_layernorm = config.get_layer_norm()
             ClsMLP = GatedMLP  # TODO: may use FusedGatedMLP to further speedup
             self.residual_mlp = ClsMLP(
                 hidden_size=config.hidden_size,
@@ -211,9 +219,7 @@ class LLaMAModel(Module):
         self.layers = DecoderLayerList(LLaMADecoderLayer, config)
 
         if self.mapping.is_last_pp_rank():
-            self.ln_f = RmsNorm(normalized_shape=config.hidden_size,
-                                eps=config.norm_epsilon,
-                                dtype=config.dtype)
+            self.ln_f = config.get_layer_norm()
 
     def forward(self,
                 input_ids,

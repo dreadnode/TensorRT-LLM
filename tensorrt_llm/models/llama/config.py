@@ -15,7 +15,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 import torch
 
@@ -25,6 +25,7 @@ from ...logger import logger
 from ...mapping import Mapping
 from ..modeling_utils import PretrainedConfig, QuantConfig
 
+LayerNormType = Literal["layer", "rms"]
 
 class LLaMAConfig(PretrainedConfig):
 
@@ -37,6 +38,8 @@ class LLaMAConfig(PretrainedConfig):
                  residual_mlp: bool = False,
                  disable_weight_only_quant_plugin: bool = False,
                  moe: Optional[Union[MoeConfig, dict]] = None,
+                 clip_qkv: Optional[float] = None,
+                 layer_norm_type: LayerNormType = "rms",
                  **kwargs):
         self.mlp_bias = mlp_bias
         self.attn_bias = attn_bias
@@ -44,6 +47,8 @@ class LLaMAConfig(PretrainedConfig):
         self.rotary_scaling = rotary_scaling
         self.residual_mlp = residual_mlp
         self.disable_weight_only_quant_plugin = disable_weight_only_quant_plugin
+        self.clip_qkv = clip_qkv
+        self.layer_norm_type = layer_norm_type
         if moe is None:
             # Legacy MOE config fields
             moe = MoeConfig(
@@ -69,6 +74,8 @@ class LLaMAConfig(PretrainedConfig):
         output['residual_mlp'] = self.residual_mlp
         output[
             'disable_weight_only_quant_plugin'] = self.disable_weight_only_quant_plugin
+        output['clip_qkv'] = self.clip_qkv
+        output['layer_norm_type'] = self.layer_norm_type
         output['moe'] = self.moe.to_dict()
         return output
 
@@ -116,6 +123,12 @@ class LLaMAConfig(PretrainedConfig):
         residual_mlp = getattr(hf_config, "parallel_attn_mlp_res", False)
         disable_weight_only_quant_plugin = kwargs.pop(
             'disable_weight_only_quant_plugin', False)
+        clip_qkv = getattr(hf_config, 'clip_qkv', None)
+        norm_epsilon = getattr(hf_config, 'rms_norm_eps', 1e-5)
+
+        layer_norm_type = kwargs.pop('layer_norm_type', 'rms')
+        if hf_config.model_type == "olmo":
+            layer_norm_type = 'layer'
 
         if hf_config.model_type == "mixtral" or hf_config.model_type == "arctic":
             # HF LLaMA-type models are implicitly using gated activation.
@@ -157,7 +170,7 @@ class LLaMAConfig(PretrainedConfig):
             position_embedding_type='rope_gpt_neox',
             max_position_embeddings=hf_config.max_position_embeddings,
             hidden_act=hidden_act,
-            norm_epsilon=hf_config.rms_norm_eps,
+            norm_epsilon=norm_epsilon,
             attn_bias=attn_bias,
             rotary_base=rotary_base,
             rotary_scaling=rotary_scaling,
@@ -166,6 +179,8 @@ class LLaMAConfig(PretrainedConfig):
             moe=moe_config,
             mapping=mapping,
             quantization=quant_config,
+            clip_qkv=clip_qkv,
+            layer_norm_type=layer_norm_type,
             **kwargs)
 
     @classmethod

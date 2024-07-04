@@ -110,6 +110,7 @@ MODEL_MAP = {
     'MistralForCausalLM': LLaMAForCausalLM,
     'MixtralForCausalLM': LLaMAForCausalLM,
     'ArcticForCausalLM': LLaMAForCausalLM,
+    'OlmoForCausalLM': LLaMAForCausalLM,
     'Grok1ModelForCausalLM': GrokForCausalLM,
     'InternLMForCausalLM': LLaMAForCausalLM,
     'InternLM2ForCausalLM': LLaMAForCausalLM,
