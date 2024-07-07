@@ -1101,14 +1101,16 @@ def load_weights_from_hf_model(hf_model,
                                            plugin_weight_only_quant_type, dtype,
                                            use_gemm_woq_plugin))
 
-        # Layer norms do not use tensor parallelism
-        input_ln_weight = get_weight(model_params, prefix + 'input_layernorm',
-                                     dtype)
-        weights[tllm_prex + 'input_layernorm.weight'] = input_ln_weight
+        if prefix + 'input_layernorm' in model_params:
+            # Layer norms do not use tensor parallelism
+            input_ln_weight = get_weight(model_params, prefix + 'input_layernorm',
+                                        dtype)
+            weights[tllm_prex + 'input_layernorm.weight'] = input_ln_weight
 
-        post_ln_weight = get_weight(model_params,
-                                    prefix + 'post_attention_layernorm', dtype)
-        weights[tllm_prex + 'post_layernorm.weight'] = post_ln_weight
+        if prefix + 'post_attention_layernorm' in model_params:
+            post_ln_weight = get_weight(model_params,
+                                        prefix + 'post_attention_layernorm', dtype)
+            weights[tllm_prex + 'post_layernorm.weight'] = post_ln_weight
 
         if config.residual_mlp:
             residual_ln_weight = get_weight(model_params,
@@ -1169,8 +1171,9 @@ def load_weights_from_hf_model(hf_model,
                                                     mapping.tp_size,
                                                     mapping.tp_rank,
                                                     dim=0)
-        ln_f_w = get_weight(model_params, 'model.norm', dtype)
-        weights['transformer.ln_f.weight'] = ln_f_w
+        if 'model.norm' in model_params:
+            ln_f_w = get_weight(model_params, 'model.norm', dtype)
+            weights['transformer.ln_f.weight'] = ln_f_w
 
     tok = time.time()
     t = time.strftime('%H:%M:%S', time.gmtime(tok - tik))

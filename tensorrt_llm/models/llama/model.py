@@ -56,7 +56,7 @@ class LLaMADecoderLayer(Module):
         self.layer_idx = layer_idx
         self.config = config
 
-        self.input_layernorm = config.get_layer_norm()
+        self.input_layernorm = get_layer_norm(config)
 
         layers_range = config.mapping.pp_layers(config.num_hidden_layers)
         self.local_layer_idx = layer_idx - layers_range[0]
@@ -99,7 +99,7 @@ class LLaMADecoderLayer(Module):
                           quant_mode=config.quant_mode,
                           **mlp_kwargs)
 
-        self.post_layernorm = config.get_layer_norm()
+        self.post_layernorm = get_layer_norm(config)
 
         # Residual MLP that applies on pre-attention input
         # TODO: change to self.has_residual_mlp = self.config.residual_mlp after ModelOpt quantize config is updated
@@ -109,7 +109,7 @@ class LLaMADecoderLayer(Module):
             self.has_residual_mlp = True
 
         if self.has_residual_mlp:
-            self.residual_layernorm = config.get_layer_norm()
+            self.residual_layernorm = get_layer_norm(config)
             ClsMLP = GatedMLP  # TODO: may use FusedGatedMLP to further speedup
             self.residual_mlp = ClsMLP(
                 hidden_size=config.hidden_size,
@@ -141,6 +141,10 @@ class LLaMADecoderLayer(Module):
         else:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
+        
+        norm_weight = None
+        if getattr(self.post_layernorm, 'weight'):
+            norm_weight = self.post_layernorm.weight.value
 
         attention_output = self.attention(
             hidden_states,
@@ -155,7 +159,7 @@ class LLaMADecoderLayer(Module):
                 if default_net().plugin_config.reduce_fusion else
                 AllReduceFusionOp.NONE,
                 residual=residual,
-                norm_weight=self.post_layernorm.weight.value,
+                norm_weight=norm_weight,
                 eps=self.post_layernorm.eps))
 
         if use_cache:
@@ -219,7 +223,7 @@ class LLaMAModel(Module):
         self.layers = DecoderLayerList(LLaMADecoderLayer, config)
 
         if self.mapping.is_last_pp_rank():
-            self.ln_f = config.get_layer_norm()
+            self.ln_f = get_layer_norm(config)
 
     def forward(self,
                 input_ids,
